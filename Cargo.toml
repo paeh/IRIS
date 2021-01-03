@@ -1,6 +1,6 @@
 [package]
 name = "iris-ng"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["paeh"]
 license = "LGPL-2.1"
 description = "Crate to make TIPC available in Rust."
