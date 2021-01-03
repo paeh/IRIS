@@ -1,0 +1,3 @@
+[submodule "tipc-tipcutils"]
+	path = tipcutils
+	url = git://git.code.sf.net/p/tipc/tipcutils

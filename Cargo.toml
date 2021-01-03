@@ -1,0 +1,24 @@
+[package]
+name = "iris"
+version = "0.1.0"
+authors = ["paeh"]
+license = "LGPL"
+description = "Crate to make TIPC available in Rust."
+homepage = "https://github.com/paeh/IRIS"
+repository = "https://github.com/paeh/IRIS"
+documentation = "https://github.com/paeh/IRIS"
+categories = ["api-bindigs"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "iris"
+path = "src/lib.rs"
+
+[dependencies]
+errno = "0.2.7"
+
+[build-dependencies]
+bindgen = "0.56.0"
+cc = "1.0.66"
