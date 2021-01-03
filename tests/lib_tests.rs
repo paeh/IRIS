@@ -65,9 +65,10 @@ fn test_wait_for_service_and_hello_world()
             Ok(_) => {},
         }
 
-        let mut sender = IrisAddressType{addr_type: 0, instance: 0, node: 0};
+        let mut sender = IrisAddressType::new();
+        let mut member = IrisAddressType::new();
         
-        match s_conn.recv_from(&mut sender)
+        match s_conn.recv_from(&mut sender, &mut member)
         {
             Ok(r) => {
                 assert!(r[0] == 'a' as u8);
@@ -80,7 +81,7 @@ fn test_wait_for_service_and_hello_world()
 
         let resp = vec!('j' as u8, 'k' as u8);
         
-        match s_conn.sendto(&resp, &sender)
+        match s_conn.sendto(&resp, &sender,)
         {
             Ok(_) => {},
             Err(e) => assert!(false, "Test failed: {}", e),
@@ -134,7 +135,7 @@ fn test_join_and_group_com()
 
     let group = IrisAddressType{addr_type: GROUP_ID, instance: GROUP_INSTANCE, node: 0};
 
-    match conn.join(&group, false, false)
+    match conn.join(&group, true, false)
     {
         Ok(_) => {},
         Err(e) => assert!(false, "Test failed: {}", e),
@@ -149,6 +150,21 @@ fn test_join_and_group_com()
         Err(e) => assert!(false, "Test failed: {}", e),
     }
 
+    // check for member join event
+    let mut sock = IrisAddressType::new();
+    let mut member = IrisAddressType::new();
+    match conn.recv_from(&mut sock, &mut member)
+    {
+        Ok(buf) => {
+            if buf.len() != 0
+            {
+                assert!(false, "Not a member event!");
+            }
+        },
+        Err(e) => assert!(false, "Test failed: {}", e),
+    };
+
+    // send data to group
     let data = vec!('a' as u8, 'b' as u8, 'c' as u8);
 
     match conn2.sendto(&data, &group)
@@ -157,7 +173,7 @@ fn test_join_and_group_com()
         Err(e) => assert!(false, "Test failed: {}", e),
     }
 
-    match conn2.recv()
+    match conn.recv()
     {
         Ok(r) => {
             assert!(r[0] == 'a' as u8);

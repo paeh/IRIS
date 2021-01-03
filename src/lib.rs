@@ -6,6 +6,7 @@ use std::os::raw::{c_int, c_void, c_uint};
 use iris_error_wrapper::IrisErrorWrapper;
 use std::result::{Result};
 use std::vec::Vec;
+use std::fmt;
 
 pub type IrisResult<T> = Result<T, IrisErrorWrapper>;
 
@@ -31,6 +32,22 @@ pub struct IrisAddressType
     pub addr_type: u32,
     pub instance: u32,
     pub node: u32,
+}
+
+impl IrisAddressType
+{
+    pub fn new() -> Self
+    {
+        IrisAddressType{addr_type: 0, instance: 0, node: 0}
+    }
+}
+
+impl fmt::Display for IrisAddressType
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+    {
+        write!(f, "({}, {}, {})", self.addr_type, self.instance, self.node)
+    }
 }
 
 pub enum SockOption
@@ -81,21 +98,15 @@ impl Connection
 
         let res = unsafe { tipc_bind(self.socket, service_type, lower, upper, node) };
 
-        if res == 0
+        match res
         {
-            Ok(())
-        }
-        else if res == -1
-        {
-            Err(IrisErrorWrapper::new_with_code("Bind failed due to scope error!", -1))
-        }
-        else
-        {
-            Err(IrisErrorWrapper::new("Bind failed!"))
+            0 => Ok(()),
+            -1 => Err(IrisErrorWrapper::new_with_code("Bind failed due to scope error!", -1)),
+            _ => Err(IrisErrorWrapper::new("Bind failed!")),
         }
     }
 
-    pub fn recv_from(&self, sender: &mut IrisAddressType) -> IrisResult<Vec<u8>>
+    pub fn recv_from(&self, sock: &mut IrisAddressType, member: &mut IrisAddressType) -> IrisResult<Vec<u8>>
     {
         let buf: [u8; TIPC_MAX_USER_MSG_SIZE as usize] = [0; TIPC_MAX_USER_MSG_SIZE as usize];
         let mut sock_id = tipc_addr { type_ : 0, instance: 0, node: 0 };
@@ -108,16 +119,22 @@ impl Connection
                                          &mut sock_id,
                                          &mut client_id,
                                          &mut err) };
-        if res > 0
+        match res
         {
-            sender.addr_type = sock_id.type_;
-            sender.instance = sock_id.instance;
-            sender.node = sock_id.node;
-            Ok(buf[0..res as usize].to_vec())
-        }
-        else
-        {
-            Err(IrisErrorWrapper::new("No data was received!"))
+            val if val >= 0 => {
+                // store socket information
+                sock.addr_type = sock_id.type_;
+                sock.instance = sock_id.instance;
+                sock.node = sock_id.node;
+
+                //store member id
+                member.addr_type = client_id.type_;
+                member.instance = client_id.instance;
+                member.node = client_id.node;
+
+                Ok(buf[0..res as usize].to_vec())
+            },
+            _ => Err(IrisErrorWrapper::new("No data was received!")),
         }
     }
 
@@ -128,13 +145,11 @@ impl Connection
                                      buf.as_ptr() as *mut c_void,
                                      TIPC_MAX_USER_MSG_SIZE as u64,
                                      true) };
-        if res > 0
+        match res
         {
-            Ok(buf[0..res as usize].to_vec())
-        }
-        else
-        {
-            Err(IrisErrorWrapper::new("No data was received!"))
+            val if val > 0 => Ok(buf[0..res as usize].to_vec()),
+            0 => Err(IrisErrorWrapper::new("No data was received! Could be a event!")),
+            _ => Err(IrisErrorWrapper::new("Error during recv!")),
         }
     }
 
@@ -145,13 +160,10 @@ impl Connection
 
         let res = unsafe { tipc_connect(self.socket, &addr) };
 
-        if res == 0
+        match res
         {
-            Ok(())
-        }
-        else
-        {
-            Err(IrisErrorWrapper::new("Connect failed!"))
+            0 => Ok(()),
+            _ => Err(IrisErrorWrapper::new("Connect failed!")),
         }
     }
 
@@ -173,13 +185,20 @@ impl Connection
         let mut addr = tipc_addr { type_: 0, instance: 0, node: 0 };
         let res = unsafe { tipc_accept(self.socket, &mut addr) };
 
-        if res == 0
+        match res
         {
-            Ok(IrisAddressType{ addr_type: addr.type_, instance: addr.instance, node: addr.node })
+            0 => Ok(IrisAddressType{ addr_type: addr.type_, instance: addr.instance, node: addr.node }),
+            _ => Err(IrisErrorWrapper::new("Accept failed!")),
         }
-        else
-        {
-            Err(IrisErrorWrapper::new("Accept failed!"))
+    }
+
+    pub fn listen(&self) -> IrisResult<()>
+    {
+        let res = unsafe{ tipc_listen(self.socket, 0) };
+
+        match res{
+            0 => Ok(()),
+            _ => Err(IrisErrorWrapper::new("Listen failed!")),
         }
     }
 
@@ -187,13 +206,11 @@ impl Connection
     {
         let res = unsafe { tipc_send(self.socket, buf.as_ptr() as *const c_void, buf.len() as u64) };
 
-        if res > 0
+        match res
         {
-            Ok(res)
-        }
-        else
-        {
-            Err(IrisErrorWrapper::new("Send failed!"))
+            _ if buf.len() == (res as usize) => Ok(res),
+            _ if buf.len() > (res as usize) => Err(IrisErrorWrapper::new(format!("Data only send partially: {}", res).as_str())),
+            _ => Err(IrisErrorWrapper::new("Send failed!")),
         }
     }
 
@@ -202,13 +219,24 @@ impl Connection
         let dest = Connection::make_tipc_addr(addr);
         let res = unsafe { tipc_sendto(self.socket, buf.as_ptr() as *const c_void, buf.len() as u64, &dest) };
 
-        if res > 0
+        match res
         {
-            Ok(res)
+            _ if buf.len() == (res as usize) => Ok(res),
+            _ if buf.len() > (res as usize) => Err(IrisErrorWrapper::new(format!("Data only send partially: {}", res).as_str())),
+            _ => Err(IrisErrorWrapper::new("Sendto failed!")),
         }
-        else
+    }
+
+    pub fn multicast(&self, buf: &Vec<u8>, addr: &IrisAddressType) -> IrisResult<i32>
+    {
+        let dest = Connection::make_tipc_addr(addr);
+        let res = unsafe { tipc_mcast(self.socket, buf.as_ptr() as *const c_void, buf.len() as u64, &dest) };
+
+        match res
         {
-            Err(IrisErrorWrapper::new("Sendto failed!"))
+            val if buf.len() == (val as usize) => Ok(val),
+            val if buf.len() > (val as usize) => Err(IrisErrorWrapper::new(format!("Data only send partially: {}", val).as_str())),
+            _ => Err(IrisErrorWrapper::new("Multicast failed!")),
         }
     }
 
@@ -221,13 +249,10 @@ impl Connection
                                            true,
                                            subscription.timeout) };
         
-        if res == 0
+        match res
         {
-            Ok(())
-        }
-        else
-        {
-            Err(IrisErrorWrapper::new("Subscription failed!"))
+            0 => Ok(()),
+            _ => Err(IrisErrorWrapper::new("Subscription failed!")),
         }
     }
 
@@ -238,13 +263,10 @@ impl Connection
                              node: 0 };
         let res = unsafe { tipc_srv_wait(&sub, srv.timeout) };
 
-        if res
+        match res
         {
-            Ok(res)
-        }
-        else
-        {
-            Err(IrisErrorWrapper::new("Service not available in time"))
+            true => Ok(res),
+            false => Err(IrisErrorWrapper::new("Service not available in time")),
         }
     }
 
@@ -252,13 +274,10 @@ impl Connection
     {
         let res = unsafe { tipc_sock_non_block(self.socket)};
         
-        if res == self.socket
+        match res
         {
-            Ok(())
-        }
-        else
-        {
-            Err(IrisErrorWrapper::new("Making sockiet non-blocking failed!"))
+            val if val == self.socket => Ok(()),
+            _ => Err(IrisErrorWrapper::new("Making sockiet non-blocking failed!")),
         }
     }
 
@@ -272,13 +291,10 @@ impl Connection
         let mut group = Connection::make_tipc_addr(addr);
         let res = unsafe{tipc_join(self.socket, &mut group, events, loopback)};
 
-        if res == 0
+        match res
         {
-            Ok(())
-        }
-        else
-        {
-            Err(IrisErrorWrapper::new("Group join failed!"))
+            0 => Ok(()),
+            _ => Err(IrisErrorWrapper::new("Group join failed!")),
         }
     }
 
@@ -286,13 +302,10 @@ impl Connection
     {
         let res = unsafe{tipc_leave(self.socket)};
 
-        if res == 0
+        match res
         {
-            Ok(())
-        }
-        else
-        {
-            Err(IrisErrorWrapper::new("Group leave failed!"))
+            0 => Ok(()),
+            _ => Err(IrisErrorWrapper::new("Group leave failed!")),
         }
     }
 }
